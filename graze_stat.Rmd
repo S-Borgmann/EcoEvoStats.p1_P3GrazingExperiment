@@ -1,0 +1,214 @@
+---
+title: "graze_stat"
+author: "Jelena H. Pantel"
+date: "2023-10-17"
+output:
+  pdf_document: default
+  html_document: default
+always_allow_html: true
+urlcolor: blue
+---
+
+```{r setup,include=FALSE,warning=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(DiagrammeR)
+library(tidyr)
+```
+
+## 1. Causal diagram of grazing rate
+
+Grazing rates are produced by a variety of factors, encoded in the diagram below:
+
+![DAG for grazing rates](./dag_hand.png){width="50%"}
+
+We can draw this diagram using R:
+
+```{r tidy=TRUE, tidy.opts=list(width.cutoff=60),echo=FALSE,figures-1,fig.height = 4, fig.width = 4}
+DiagrammeR::grViz("
+digraph {
+  graph [ranksep = 0.2]
+
+  node [shape = plaintext]
+    A    [label = 'Alone']
+    Y    [label = 'Both']
+
+    Lik  [label = 'Liking cats']
+    Pers [label = 'Personality']
+    Lon  [label = 'Loneliness']
+    SEP  [label = 'Socioeconomic position', shape = box]
+
+  edge [minlen = 2]
+    A->Y
+
+    Lik->A
+    Pers->Lik
+    Pers->Y
+
+    A->Lon->Y
+
+    SEP->A
+    SEP->Y
+
+  { rank = same; A; Y }
+}
+")
+```
+
+## 2. Probabilistic simulation of grazing rate values
+
+We can begin to simulate grazing rates in our experiment using the above causal graph as follows:
+
+```{r tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+
+## Set the random seed ##
+set.seed(42)
+
+## constants ##
+rep <- 3
+
+## parameters ##
+
+# Level 3 - Species #
+B_dp <- 1.3 # Fixed D. pulex grazing rate
+B_dm <- 1.7 # Fixed D. magna grazing rate
+
+# Level 4 #
+B_dp_intraC <- 1.1 # Fixed D. pulex intra-clonal grazing rate - I should probably modify that this depends on clone.
+B_dm_intraC <- 1.5 # Fixed D. magna intra-clonal grazing rate - I should probably modify that this depends on clone.
+
+d1 <- 0.2 # Fixed D. pulex among-clonal variance in grazing rate
+d2 <- 0.2 # Fixed D. magna among-clonal variance in grazing rate
+
+d3 <- 0.1 # Fixed D. pulex variance in intraspecific grazing
+d5 <- 0.1 # Fixed D. magna variance in intraspecific grazing
+
+d4 <- 0.1 # Fixed D. pulex variance in interspecific grazing with D. magna
+d6 <- 0.1 # Fixed D. magna variance in interspecific grazing with D. pulex
+
+
+# Level 5 - Meso #
+dp_intraS <- 1.2 # Center of D. pulex intraspecifc grazing rate
+dm_intraS <- 1.6 # Center of D. magna intraspecifc grazing rate
+dp_interS <- 0.8 # Center of D. pulex interspecific grazing rate with D. magna
+dm_interS <- 1.68 # Center of D. magna interspecific grazing rate with D. pulex
+
+```
+
+```{r tidy=TRUE, tidy.opts=list(width.cutoff=60),eval=FALSE}
+## grazing rates ##
+## Note these are backwards and don't work. Paste in from function below ##
+## I retain this here because its the order needed for a Bayesian model ##
+
+g <- rnorm(rep,g_s,delta_c) # rep is the number of replicates per treatment
+
+g_s <- B1*Spec + B2*(1-Spec) # B1 is the D. pulex grazing rate center, B2 is the D. magna grazing rate center. Spec takes a value of 1 for Dp and 0 for Dm.
+
+delta_c <- d1*Spec + d2*(1-Spec) # d1 is the Dp among-clone variance, d2 is the Dm among-clone variance.
+
+B1 <- B_dp*Alone + B_dp_comp*(1-Alone) # B_dp is the fixed D. pulex grazing rate center, Alone takes a value of 0 for Treatment A (when the Daphnia is in isolation) and 1 for any other treatment (when the Daphnia is in competition).
+
+B2 <- B_dm*Alone + B_dm_comp*(1-Alone) # B_dm is the fixed D. magna grazing rate center, Alone takes a value of 0 for Treatment A (when the Daphnia is in isolation) and 1 for any other treatment (when the Daphnia is in competition).
+
+B_dp_comp <- B_dp_intraC*IntraC + B3*(1-IntraC) # B_dp_intraC is the intra-clonal grazing rate (competition should be most intense when another individual of the same clone is present) and IntraC takes a value of 0 for Treatment B (when the Daphnia is in competition with an individual of the same clone) and a value of 1 for the other treatments.
+
+B_dm_comp <- B_dm_intraC*IntraC + B4*(1-IntraC) # B_dm_intraC is the intra-clonal grazing rate (competition should be most intense when another individual of the same clone is present) and IntraC takes a value of 0 for Treatment B (when the Daphnia is in competition with an individual of the same clone) and a value of 1 for the other treatments.
+
+B3 <- B_dp_intraS*Comp + B_dp_interS*(1-Comp) # B_dp_intraS is the center of the intraspecific grazing rate for D. pulex, and Comp takes a value of 0 for Treatments C,D,E. B_dp_interS is the center of the interspecific grazing rate for D. pulex against D. magna, and Comp takes a value of 1 for treatments F,G,H.
+
+B4 <- B_dm_intraS*Comp + B_dm_interS*(1-Comp)
+
+B_dp_intraS <- rnorm(3,dp_intraS,d3)
+B_dp_interS <- rnorm(3,dp_interS,d4)
+B_dm_intraS <- rnorm(3,dm_intraS,d5)
+B_dm_interS <- rnorm(3,dm_interS,d6)
+```
+
+We use this logic to construct a simulation for 3x replicates of grazing rate values per focal species (Dp or Dm) X treatment (A-H).
+
+```{r tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+## grazing rate generating function ##
+g_gen <- function(rep=3,B_dp=1.3,B_dp_intraC=1.1,B_dm=1.7,B_dm_intraC=1.5,d1=0.2,d2=0.2,dp_intraS=1.2,d3=0.1,dp_interS=0.8,d4=0.1,dm_intraS=1.6,d5=0.1,dm_interS=1.68,d6=0.1,Spec,Alone,IntraC,Comp){
+  
+  ##Geting 3 values out of normal distribution of 'daphnia species' 'intra/interspecific' grazing rates
+  B_dp_intraS <- rnorm(3,dp_intraS,d3)
+  B_dp_interS <- rnorm(3,dp_interS,d4)
+  B_dm_intraS <- rnorm(3,dm_intraS,d5)
+  B_dm_interS <- rnorm(3,dm_interS,d6)
+  
+  ## Setting the grazing rates to if there is Comp 0(same species setup) or 1(different species setup) = If they would come out of coexistence or no coexistence mesocosms 
+  ##!!DOES THE *COMP AND *(COMP-1) NEED TO BE SWITCHED FOR ONE SPECIES??!
+  B3 <- B_dp_intraS*Comp + B_dp_interS*(1-Comp) # B_dp_intraS is the center of the intraspecific grazing rate for D. pulex, and Comp takes a value of 0 for Treatments C,D,E. B_dp_interS is the center of the interspecific grazing rate for D. pulex against D. magna, and Comp takes a value of 1 for treatments F,G,H.
+  B4 <- B_dm_intraS*Comp + B_dm_interS*(1-Comp)
+  
+  B_dp_comp <- B_dp_intraC*IntraC + B3*(1-IntraC) # B_dp_intraC is the intra-clonal grazing rate (competition should be most intense when another individual of the same clone is present) and IntraC takes a value of 0 for Treatment B (when the Daphnia is in competition with an individual of the same clone) and a value of 1 for the other treatments.
+  B_dm_comp <- B_dm_intraC*IntraC + B4*(1-IntraC) # B_dm_intraC is the intra-clonal grazing rate (competition should be most intense when another individual of the same clone is present) and IntraC takes a value of 0 for Treatment B (when the Daphnia is in competition with an individual of the same clone) and a value of 1 for the other treatments.
+  
+  B1 <- B_dp*Alone + B_dp_comp*(1-Alone) # B_dp is the fixed D. pulex grazing rate center, Alone takes a value of 1 for Treatment A (when the Daphnia is in isolation) and 0 for any other treatment (when the Daphnia is in competition).
+  B2 <- B_dm*Alone + B_dm_comp*(1-Alone) # B_dm is the fixed D. magna grazing rate center, Alone takes a value of 1 for Treatment A (when the Daphnia is in isolation) and 0 for any other treatment (when the Daphnia is in competition).
+  
+  g_s <- B1*Spec + B2*(1-Spec) # B1 is the D. pulex grazing rate center, B2 is the D. magna grazing rate center. Spec takes a value of 1 for Dp and 0 for Dm.
+  delta_c <- d1*Spec + d2*(1-Spec) # d1 is the Dp among-clone variance, d2 is the Dm among-clone variance.
+  
+  g <- rnorm(rep,g_s,delta_c) # rep is the number of replicates per treatment
+  return(g)
+}
+
+# Try this out for Species Dp, Treatment A
+Spec <- 1
+Alone <- 1
+IntraC <- 1
+Comp <- 0
+g_gen(Spec=Spec,Alone=Alone,IntraC=IntraC,Comp=Comp)
+# Try this out for Species Dm, Treatment A
+Spec <- 0
+Alone <- 1
+IntraC <- 1
+Comp <- 0
+g_gen(Spec=Spec,Alone=Alone,IntraC=IntraC,Comp=Comp)
+
+g_sim <- function(focal_species,treatment){
+  # Generates a grazing rate value given the treatment of the grazing rate experiment and the species of the focal clone
+  if(focal_species=="Dm"){Spec <- 0}
+  else if (focal_species=="Dp"){Spec <- 1}
+  
+  if(treatment=="A"){
+    Alone <- 1
+    IntraC <- 1
+    Comp <- 0
+  } else if(treatment=="B"){
+    Alone <- 0
+    IntraC <- 0
+    Comp <- 0
+  } else if(treatment == "C" | treatment == "D" | treatment == "E"){
+    Alone <- 0
+    IntraC <- 1
+    Comp <- 0
+  } else if(treatment == "F" | treatment == "G" | treatment == "H"){
+    Alone <- 0
+    IntraC <- 1
+    Comp <- 1
+  }
+  g_gen(Spec=Spec,Alone=Alone,IntraC=IntraC,Comp=Comp)
+}
+
+g_sim(focal_species="Dm",treatment="B")
+g_sim(focal_species="Dp",treatment="H")
+```
+
+## 3. Next steps
+
+1.  Check this works properly (the embedded nature of the binary variables), both inside the g-generating function and in the function that calls the simulation.
+
+2.  Run in a way that recreates grazing experiment data (enter a dataframe that resembles what we will produce when that data is generated from the images).
+
+3.  Incorporate mesocosm treatment (Dp / Dm or Dp+Dm), re-run.
+
+4.  Consider ANOVA or Bayesian model to estimate effects of treatments based on this logic.
+
+5.  To learn more about Bayesian heirarchical models and DAGs (Directed Acyclic Graphs), read here:
+
+Bayes Rules! An Introduction to Applied Bayesian Modeling - Alicia A. Johnson, Miles Q. Ott, Mine Dogucu - [Chapter 15](https://www.bayesrulesbook.com/chapter-15), [Chapter 16](https://www.bayesrulesbook.com/chapter-16).
+
+[Causal graphs in R with DiagrammeR](https://www.erikigelstrom.com/articles/causal-graphs-in-r-with-diagrammer/)
+
+[NCEAS Intro to Bayesian tutorial](https://learning.nceas.ucsb.edu/2021-10-delta/session-4-introduction-to-bayesian-modeling.html#drafting-bayesian-models)
